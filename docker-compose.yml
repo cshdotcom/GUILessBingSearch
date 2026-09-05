@@ -1,0 +1,34 @@
+# GUI-Less Bing Search — Docker Compose 部署
+#
+# 用法:
+#   docker compose up -d            # 拉取 GHCR 镜像并启动
+#   curl http://127.0.0.1:8765/health
+#
+# 首次启动后建议执行一次搜索热身(初始化浏览器 profile):
+#   curl -s -X POST http://127.0.0.1:8765/search \
+#     -H "Content-Type: application/json" \
+#     -d '{"query":"hello","count":5}'
+services:
+  bing-search:
+    # 推荐直接使用 CI 构建好的 GHCR 镜像(大陆一般可直连);
+    # 也可注释掉 image,打开下一行 build 从源码本地构建
+    image: ghcr.io/cshdotcom/guiless-bing-search:latest
+    # build: .
+    container_name: bing-search
+    restart: unless-stopped
+    ports:
+      - "8765:8765"            # 左侧为本机端口,按需修改
+    environment:
+      - PORT=8765
+      - SEARCH_INTERVAL=1       # 相邻搜索最小间隔(秒),自动附加 0~50% 抖动
+      # ---- 以下按需启用 ----
+      # - API_KEY=change-me                       # Bearer 鉴权,设置后所有端点要求 Authorization 头
+      # - BING_BASE_URL=https://cn.bing.com       # 大陆网络若被重定向到 cn,显式固定之
+      # - BING_ENSEARCH=1                         # 1=强制国际版 0=强制国内版(仅 cn 域名时有效)
+      # - BING_U_COOKIE=xxx                       # 已知良好 _U Cookie(排障用,见上游 README)
+    volumes:
+      - ./data:/data            # 浏览器 profile 持久化(保留 Cookie 会话,提升翻页可靠性)
+    # QtWebEngine 渲染进程共享内存;低内存机器崩溃时可启用
+    # shm_size: 512m
+    # 内存充裕时可限制资源
+    # mem_limit: 1g

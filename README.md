@@ -44,6 +44,16 @@ python guiless_bing_search.py
 python guiless_bing_search.py --profile-dir /path/to/profile
 ```
 
+## Docker
+
+A prebuilt dual-arch (amd64/arm64) image is published via GitHub CI:
+
+```bash
+docker run -d -p 8765:8765 -v $PWD/data:/data ghcr.io/cshdotcom/guiless-bing-search:latest
+```
+
+See [docs/DOCKER.zh-CN.md](docs/DOCKER.zh-CN.md) for the full deployment guide (Chinese), including `docker-compose.yml`, mainland-China network notes, and volume persistence.
+
 ## Usage Examples
 
 Once the service is running, search Bing from the command line:

@@ -1,0 +1,10 @@
+.git
+.github
+aur
+docs
+PKGBUILD
+*.md
+*.service
+*.conf.example
+docker-compose.yml
+data/
