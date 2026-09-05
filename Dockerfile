@@ -23,7 +23,10 @@ ENV PYTHONUNBUFFERED=1 \
     # 浏览器 profile 持久化目录(挂载 /data 卷即可保留 Cookie 会话)
     XDG_DATA_HOME=/data
 
-# QtWebEngine 无头运行所需的系统库全集(经离线 rootfs 实测校准,勿随意删减)
+# QtWebEngine 无头运行所需的系统库全集
+# (经 bookworm rootfs + proot 导入链逐库枚举校准:
+#  apt 自动解析 libglvnd/libxau/libfreetype 等间接依赖,
+#  但 libglib2.0-0 / libxkbfile1 / libatomic1 无上游触发,必须显式声明)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libegl1 \
         libnss3 libnspr4 \
@@ -34,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-shm0 \
         libxcb-sync1 libxcb-xfixes0 libxcb-xkb1 \
         libasound2 libdbus-1-3 libfontconfig1 \
+        libglib2.0-0 libxkbfile1 libatomic1 \
         fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
