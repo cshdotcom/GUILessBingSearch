@@ -6,6 +6,8 @@ In many server, container, or embedded environments there is no desktop or brows
 
 Because no result links are fed back to Bing, the tool does not leak which results the user actually visited, offering a degree of privacy protection compared to using a regular browser.
 
+**Automatic pagination:** when the requested `count` exceeds the number of results rendered on a single SERP (~10), the engine automatically follows Bing's own next-page links (carrying the native `FORM`/`FPIG` request-signature parameters) and aggregates deduplicated results across pages until `count` is satisfied, results are exhausted, or the page cap (8 pages) is reached. Cross-page deduplication guarantees no repeated links in the response.
+
 **Disclaimer:** This tool is an independent, unofficial project created for educational purposes, personal accessibility, and academic research on headless information retrieval. It acts as a local browser wrapper to facilitate personal workflows and interoperability. It is not intended for bulk scraping, commercial use, or bypassing of any official APIs. Users are encouraged to respect fair use principles and the terms of service of the websites they access.
 
 ## Dependencies
@@ -69,6 +71,8 @@ Response format:
     ...
 ]
 ```
+
+Note: `count` up to 30 is fully honored — requests larger than one page of results are transparently paginated and aggregated (see **Automatic pagination** above).
 
 ## Environment Variables
 

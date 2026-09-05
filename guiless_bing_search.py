@@ -46,6 +46,7 @@ import argparse
 import base64
 import json
 import logging
+import math
 import platform
 import queue
 import random
@@ -107,7 +108,20 @@ _EXTRACT_JS = """\
             snippet: p ? (p.textContent || '').trim() : ''
         });
     });
-    return JSON.stringify(results);
+    // Bing 自家下一页链接(sb_pagN,携带 FORM/FPIG 签名参数),
+    // 跟随它是浏览器自然行为,比裸构造 first= 更可靠。
+    var next = null;
+    var candidates = [
+        'a.sb_pagN',
+        '.b_pag a[title="下一页"]',
+        '.b_pag a[title="Next results"]',
+        '.b_pag a[aria-label="Next page"]'
+    ];
+    for (var i = 0; i < candidates.length && !next; i++) {
+        var el = document.querySelector(candidates[i]);
+        if (el && el.href && el.href.indexOf('first=') >= 0) next = el.href;
+    }
+    return JSON.stringify({results: results, next: next});
 })()
 """
 
@@ -139,14 +153,29 @@ if (!window.chrome.app) window.chrome.app = {isInstalled: false};
 """
 
 
+# ── 自动翻页聚合(v2 修复)──────────────────────────────────────
+# Bing SERP 单页仅渲染 ~10 条 li.b_algo;当 count 超出单页结果数时,
+# 自动追加 first 偏移(Bing 自家翻页链接同款参数:0 基、10 的倍数)
+# 聚合多页结果,直至满足 count / 结果耗尽 / 页数上限。
+# 真浏览器会话(WebEngine 持久化 Cookie)下 first 生效;若上游忽略
+# first 返回重复页,新增数为 0,自动终止并返回已聚合部分(安全降级)。
+_PAGE_SIZE = 10                  # Bing SERP 每页结果数(first 步进)
+_MAX_PAGES_PER_QUERY = 8         # 单次查询最大翻页数(10×8=80)
+_PAGE_TURN_DELAY_MS = 500        # 翻页间隔,温和对待上游
+
+
 class _SearchRequest:
-    __slots__ = ("query", "count", "results", "done")
+    __slots__ = ("query", "count", "results", "done",
+                 "next_first", "pages", "seen_links")
 
     def __init__(self, query: str, count: int):
         self.query = query
         self.count = count
         self.results: list[dict] = []
         self.done = threading.Event()
+        self.next_first = 0      # 下一次导航的 first 偏移(0 基)
+        self.pages = 0           # 已抓取页数
+        self.seen_links: set[str] = set()
 
 
 _search_queue: queue.Queue[_SearchRequest] = queue.Queue()
@@ -296,15 +325,20 @@ class BingEngine(QObject):
         log.info("Searching: '%s'", self._current.query)
         self._navigate()
 
-    def _navigate(self):
+    def _navigate(self, first: int = 0, url: str = ""):
+        """导航到搜索页。url 非空时直接跟随(SERP 自家下一页链接),
+        否则用 first 偏移构造首屏/后续页 URL。"""
         assert self._current is not None
-        q = quote_plus(self._current.query)
-        ensearch_param, form_code, mode = _resolve_ensearch()
-        params = [f"q={q}", f"form={form_code}"]
-        if ensearch_param:
-            params.append(f"ensearch={ensearch_param}")
-        url = f"{BING_BASE_URL}/search?{'&'.join(params)}"
-        log.info("navigate %s (%s)", url, mode)
+        if not url:
+            q = quote_plus(self._current.query)
+            ensearch_param, form_code, mode = _resolve_ensearch()
+            params = [f"q={q}", f"form={form_code}"]
+            if ensearch_param:
+                params.append(f"ensearch={ensearch_param}")
+            if first > 0:
+                params.append(f"first={first}")
+            url = f"{BING_BASE_URL}/search?{'&'.join(params)}"
+        log.info("navigate %s", url)
         self._page.loadFinished.connect(self._on_loaded)
         self._page.load(QUrl(url))
 
@@ -312,7 +346,9 @@ class BingEngine(QObject):
         self._page.loadFinished.disconnect(self._on_loaded)
         if not ok:
             log.warning("Page load failed")
-            self._finish([])
+            # 翻页中途加载失败:返回已聚合的部分结果(若有),而非清空
+            partial = self._current.results if self._current is not None else []
+            self._finish(partial)
             return
         log.info("Page loaded: %s", self._page.url().toString())
         self._poll_count = 0
@@ -342,12 +378,65 @@ class BingEngine(QObject):
         self._page.runJavaScript(_EXTRACT_JS, 0, self._on_results)
 
     def _on_results(self, data):
-        assert self._current is not None
-        results = _parse_js(data)
+        req = self._current
+        assert req is not None
+        payload = _parse_js(data)
+        if isinstance(payload, dict):
+            results = payload.get("results") or []
+            next_url = payload.get("next") or ""
+        else:  # 旧格式纯数组(兼容)
+            results = payload
+            next_url = ""
+        added = 0
         for r in results:
             if "link" in r:
                 r["link"] = _decode_bing_redirect(r["link"])
-        self._finish(results[: self._current.count])
+            link = r.get("link") or ""
+            if link:
+                if link in req.seen_links:
+                    continue  # 跨页重复,跳过
+                req.seen_links.add(link)
+            req.results.append(r)
+            added += 1
+        req.pages += 1
+
+        # 自动翻页:已聚合不足 count、本页有新增、未达页数上限。
+        # 优先跟随 SERP 自家下一页链接(带 FORM 签名,浏览器自然行为);
+        # SERP 明确无下一页链接时,以 Bing 侧信号为准终止。
+        if (added > 0
+                and len(req.results) < req.count
+                and req.pages < _MAX_PAGES_PER_QUERY):
+            if not next_url:
+                log.info(
+                    "No next-page link on SERP; stopping aggregation "
+                    "at %d results (requested %d)",
+                    len(req.results), req.count,
+                )
+            else:
+                log.info(
+                    "Aggregating: %d/%d results after page %d, "
+                    "following SERP next-page link",
+                    len(req.results), req.count, req.pages,
+                )
+                QTimer.singleShot(
+                    _PAGE_TURN_DELAY_MS,
+                    lambda: self._navigate(0, next_url),
+                )
+                return
+        elif added == 0 and req.pages > 1:
+            log.info(
+                "Next page yielded no new results; stopping "
+                "aggregation at %d results (requested %d)",
+                len(req.results), req.count,
+            )
+
+        if req.pages > 1:
+            log.info(
+                "Aggregation done: %d results over %d pages "
+                "(requested %d)",
+                len(req.results), req.pages, req.count,
+            )
+        self._finish(req.results[: req.count])
 
     def _finish(self, results: list[dict]):
         assert self._current is not None
@@ -368,10 +457,19 @@ class BingEngine(QObject):
 
 
 def scrape_bing(query: str, count: int = 10) -> list[dict]:
-    """Enqueue a search request and block until results are ready."""
+    """Enqueue a search request and block until results are ready.
+
+    When ``count`` exceeds the single-page limit (~10 results), the
+    engine automatically paginates (first=10, 20, ...) and aggregates
+    deduplicated results across pages until ``count`` is satisfied,
+    results are exhausted, or the page cap is reached.
+    """
     req = _SearchRequest(query, count)
     _search_queue.put(req)
-    if not req.done.wait(timeout=30):
+    # 每多翻一页预留 12s(导航 + DOM 探测 + 翻页延时),上限 120s
+    pages_needed = max(1, math.ceil(count / _PAGE_SIZE))
+    timeout = min(30 + 12 * (pages_needed - 1), 120)
+    if not req.done.wait(timeout=timeout):
         log.warning("Search timed out: '%s'", query)
     return req.results
 
