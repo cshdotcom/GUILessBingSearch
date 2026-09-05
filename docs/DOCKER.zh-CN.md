@@ -1,6 +1,6 @@
 # Docker 部署指南(GUI-Less Bing Search)
 
-本项目已容器化。GitHub CI(`.github/workflows/docker.yml`)在每次代码变更时自动构建 **双架构(amd64 / arm64)** 镜像并推送到 GitHub 容器仓库,开箱即用。
+本项目已容器化。GitHub CI(`.github/workflows/docker.yml`)在每次代码变更时自动构建 **amd64** 镜像并推送到 GitHub 容器仓库,开箱即用(PySide6 6.9+ 上游不再发布 aarch64 wheel,故暂不提供 arm64 镜像)。
 
 | 项 | 值 |
 |---|---|
@@ -9,7 +9,7 @@
 | 基础镜像 | `python:3.12-slim-bookworm` |
 | 镜像体积 | 压缩约 500 MB(QtWebEngine 自带完整 Chromium,属正常水平) |
 | 监听端口 | 容器内 `8765`(由 `PORT` 环境变量控制) |
-| 架构 | linux/amd64、linux/arm64 |
+| 架构 | linux/amd64(arm64 因 PySide6 停发 aarch64 wheel 暂不发布) |
 
 ## 快速开始
 
