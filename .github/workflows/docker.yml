@@ -19,7 +19,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # 显式固定镜像名(否则自动取仓库名小写,会丢连字符)
+  IMAGE_NAME: cshdotcom/guiless-bing-search
 
 jobs:
   smoke:
